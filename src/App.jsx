@@ -26,18 +26,19 @@ const client = new OpenAI({
   dangerouslyAllowBrowser: true,
 });
 
-const NOTES_PROMPT = `You are a clinical assistant for Indian doctors writing SOAP notes. Complete the doctor's partial note naturally. Use Indian medical abbreviations: c/o, h/o, k/c/o, O/E, P/R/S. Output only the completion text, nothing else. Maximum 2 sentences.`;
+const NOTES_PROMPT = `You are a clinical assistant for Indian doctors writing SOAP notes. Complete the doctor's partial note naturally. Use Indian medical abbreviations: c/o, h/o, k/c/o, O/E, P/R/S. Output only the completion text, nothing else. Maximum 3-5 words.`;
 
 const SLOTS_PROMPT = `You are a clinical assistant for Indian doctors. Given a drug name and patient context, return ONLY a JSON object with these fields: dose, route, frequency, duration, instructions. Use Indian conventions: Tab./Cap./Syr., BD/TDS/OD/SOS/QID, before/after food. Example: {"dose":"650mg","route":"Oral","frequency":"SOS","duration":"3 days","instructions":"After food"}`;
 
 async function callDeepSeek(systemPrompt, userText, onChunk) {
+  console.log('[DeepSeek] REQUEST:', { system: systemPrompt, user: userText });
   const stream = await client.chat.completions.create({
     model: 'deepseek-chat',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user',   content: userText },
     ],
-    max_tokens: 80,
+    max_tokens: 30,
     temperature: 0.1,
     stream: true,
   });
@@ -49,6 +50,7 @@ async function callDeepSeek(systemPrompt, userText, onChunk) {
       onChunk(full);
     }
   }
+  console.log('[DeepSeek] RESPONSE:', full);
   return full;
 }
 
@@ -370,15 +372,22 @@ function ConfidenceBar({ value }) {
   );
 }
 
+// ─── Trim ghost to a few words ──────────────────────────────────
+function trimGhost(text, maxWords = 5) {
+  if (!text) return '';
+  return text.trim().split(/\s+/).slice(0, maxWords).join(' ');
+}
+
 // ─── Ghost Input ────────────────────────────────────────────────
 function GhostInput({ value, onChange, ghost, onAccept, onDismiss, placeholder, multiline, badge }) {
   const inputRef = useRef(null);
+  const shortGhost = trimGhost(ghost);
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Tab' && ghost) {
+    if (e.key === 'Tab' && shortGhost) {
       e.preventDefault();
       onAccept();
-    } else if (e.key === 'Escape' && ghost) {
+    } else if (e.key === 'Escape' && shortGhost) {
       e.preventDefault();
       onDismiss();
     }
@@ -387,7 +396,12 @@ function GhostInput({ value, onChange, ghost, onAccept, onDismiss, placeholder, 
   if (multiline) {
     return (
       <div className="ghost-container ghost-container-multiline">
-        <div className="ghost-wrapper">
+        <div className="ghost-overlay-wrap">
+          <div className="ghost-mirror" aria-hidden="true">
+            <span className="ghost-mirror-real">{value}</span>{shortGhost && (
+              <span className="ghost-inline-text">{shortGhost}</span>
+            )}
+          </div>
           <textarea
             ref={inputRef}
             className="ghost-input ghost-textarea"
@@ -397,34 +411,30 @@ function GhostInput({ value, onChange, ghost, onAccept, onDismiss, placeholder, 
             placeholder={placeholder}
             rows={4}
           />
-          {ghost && (
-            <div className="ghost-hint ghost-hint-multiline">
-              <span className="ghost-text">{ghost}</span>
-              <span className="ghost-key">Tab</span>
-            </div>
-          )}
         </div>
         {badge && <SourceBadge type={badge} />}
+        {shortGhost && <span className="ghost-tab-hint">Tab to accept</span>}
       </div>
     );
   }
 
   return (
     <div className="ghost-container">
-      <input
-        ref={inputRef}
-        className="ghost-input"
-        value={value}
-        onChange={onChange}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-      />
-      {ghost && (
-        <div className="ghost-hint">
-          <span className="ghost-text">{ghost}</span>
-          <span className="ghost-key">Tab</span>
+      <div className="ghost-overlay-wrap ghost-overlay-single">
+        <div className="ghost-mirror ghost-mirror-single" aria-hidden="true">
+          <span className="ghost-mirror-real">{value}</span>{shortGhost && (
+            <span className="ghost-inline-text">{shortGhost}</span>
+          )}
         </div>
-      )}
+        <input
+          ref={inputRef}
+          className="ghost-input"
+          value={value}
+          onChange={onChange}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+        />
+      </div>
       {badge && <SourceBadge type={badge} />}
     </div>
   );
@@ -775,9 +785,10 @@ export default function App() {
 
   const acceptNotesGhost = async () => {
     if (notesGhost) {
-      const newNotes = notes + notesGhost;
+      const short = trimGhost(notesGhost);
+      const newNotes = notes + short;
       setNotes(newNotes);
-      learn(notes, notesGhost);
+      learn(notes, short);
       setNotesGhost('');
       setNotesBadge(null);
 

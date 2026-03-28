@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import logging
 import httpx
@@ -42,15 +43,18 @@ async def complete(request: Request):
     user_msg = messages[-1].get("content", "")[:80] if messages else ""
     stream_mode = body.get("stream", False)
 
+    system_msg = next((m.get("content", "")[:80] for m in messages if m.get("role") == "system"), "")
     log.info("─── Chat request ───")
     log.info("  model=%s  stream=%s  messages=%d", model, stream_mode, len(messages))
-    log.info("  last_msg: %s", user_msg)
+    log.info("  system: %s", system_msg)
+    log.info("  user:   %s", user_msg)
 
     start = time.time()
 
     async def stream():
         chunk_count = 0
         byte_count = 0
+        response_text = []
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 log.info("  Connecting to DeepSeek...")
@@ -74,6 +78,16 @@ async def complete(request: Request):
                     async for chunk in response.aiter_bytes():
                         chunk_count += 1
                         byte_count += len(chunk)
+                        # Extract text content from SSE chunks for logging
+                        for line in chunk.decode(errors="ignore").split("\n"):
+                            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                                try:
+                                    data = json.loads(line[6:])
+                                    token = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                    if token:
+                                        response_text.append(token)
+                                except Exception:
+                                    pass
                         yield chunk
         except httpx.TimeoutException:
             log.error("  DeepSeek TIMEOUT after %.1fs", time.time() - start)
@@ -83,6 +97,8 @@ async def complete(request: Request):
             raise
         finally:
             elapsed = time.time() - start
+            full_response = "".join(response_text)
+            log.info("  response: %s", full_response[:200])
             log.info("  Done: %d chunks, %d bytes, %.1fs", chunk_count, byte_count, elapsed)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
